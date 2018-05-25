@@ -3,6 +3,7 @@
 __attribute__((/*fastcall,*/noinline)) int _asm_foo (int a1, int a2, int a3, int a4, int a5, int a6, int a7);
 
 __asm__ ("_asm_foo:\n\tmovq %rdi, %rax\n\taddq 0x8(%rsp), %rax\n\tret\n\t");
+//0x8(%rax,%rbx,0x4) \equiv [rax + rbx*4h - 8h]
 
 __attribute__((/*fastcall,*/noinline)) int _asm_foo2 (int a1, int a2, int a3, int a4, int a5, int a6, int a7);
 
