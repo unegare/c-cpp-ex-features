@@ -1,8 +1,13 @@
 #include <stdio.h>
 
+extern int arr[8];
+extern int arr2[8];
+
+__asm__ (".data ; arr: .zero 32 ; .comm arr2,40,32 ; .text");
+
 __attribute__((/*fastcall,*/noinline)) int _asm_foo (int a1, int a2, int a3, int a4, int a5, int a6, int a7);
 
-__asm__ ("_asm_foo:\n\tmovq %rdi, %rax\n\taddq 0x8(%rsp), %rax\n\tret\n\t");
+__asm__ ("_asm_foo: movq %rdi, %rax ; addq 0x8(%rsp), %rax ; ret ;");
 //0x8(%rax,%rbx,0x4) \equiv [rax + rbx*4h - 8h]
 
 __attribute__((/*fastcall,*/noinline)) int _asm_foo2 (int a1, int a2, int a3, int a4, int a5, int a6, int a7);
@@ -25,8 +30,11 @@ int main () {
                                                                     //rcx,rdx,rsi,rdi,r8,r9,10,r11 should be saved before call
   
   foo (15);
+  arr[5] = 10;
+  arr2[7] = 4;
   printf ("var == %ld\n", var);
   printf ("_asm_foo ret value == %d\n", _asm_foo(19,2,3,4,5,6,7));
   printf ("_asm_foo2 ret value == %d\n", _asm_foo2(25,2,3,4,5,6,7));
+  printf ("%d\n%d\n", arr[5], arr2[7]);
   return 0;
 }

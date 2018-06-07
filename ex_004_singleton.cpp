@@ -6,7 +6,7 @@ struct data {
 };
 
 int func (int val) {
-  static data d;
+  static data d = {{2,3}, 4};
   int bval = d.x;
   d.x = val;
   return bval;
