@@ -7,6 +7,7 @@ int main () {
     std::regex_token_iterator<const char *>::regex_type re(R"(\([a-zA-Z0-9\[\],. ]+\))");
     std::regex_token_iterator<const char *> next(row, row + strlen(row), re);
     std::regex_token_iterator<const char*> end;
+
     
     for (; next != end; ++next) {
       std::cout << "match == \"" << next->str() << "\"" << std::endl;
