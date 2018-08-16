@@ -3,7 +3,7 @@
 
 int main () {
   std::cout << "\033[31;42mTEXT\033[0m";
-  std::cout.flush();
+  std::cout << std::endl;
   std::cout << std::endl;
 
   int p;
