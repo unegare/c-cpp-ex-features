@@ -5,6 +5,9 @@
 #include <ucontext.h>
 #include <stdlib.h>
 
+#include <distorm3/distorm.h>
+#include <distorm3/mnemonics.h>
+
 void sigsegv_sigaction (int signum, siginfo_t *sigi, void *ucontext);
 void sigtrap_sigaction (int signum, siginfo_t *sigi, void *ucontext);
 char *addr;
@@ -69,6 +72,24 @@ void sigsegv_sigaction (int signum, siginfo_t *sigi, void *ucontext) {
   printf ("sigsegv_sigaction has been called at 0x%llx\n", current->uc_mcontext.gregs[REG_RIP]);
   printf ("crashed at %p\n", sigi->si_addr);
   printf ("addr is %p\n", addr);
+  
+  _DInst decodedInstructions[1];
+  unsigned int decodedInstructionsCount = 0;
+  _DecodeType dt = Decode64Bits;
+  unsigned char buf[20];
+  
+//  memset(buf, 0x90, 20);
+  memcpy(buf, (char*)current->uc_mcontext.gregs[REG_RIP], 20);
+  
+  _CodeInfo ci;
+  ci.code = buf;
+  ci.codeLen = sizeof(buf);
+  ci.codeOffset = 0;
+  ci.dt = dt;
+  ci.features = DF_NONE;
+  distorm_decompose(&ci, decodedInstructions, 1, &decodedInstructionsCount);
+  printf ("%s\n", GET_MNEMONIC_NAME(decodedInstructions[0].opcode));
+
   if (sigi->si_addr < addr || sigi->si_addr >= addr + 4096)
   {
     // Got SIGSEGV not on a guard page.
