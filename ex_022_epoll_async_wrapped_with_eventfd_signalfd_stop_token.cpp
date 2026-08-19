@@ -24,9 +24,9 @@ std::string_view trim(std::string_view str) {
 }
 
 void throw_sys_error() {
-  char errbuff[1024];
-  strerror_r(errno, errbuff, sizeof(errbuff));
-  throw std::runtime_error(errbuff);
+  char errbuff[128];
+  const char* errstr = strerror_r(errno, errbuff, sizeof(errbuff));
+  throw std::runtime_error(errstr);
 }
 
 struct Task {
@@ -45,16 +45,23 @@ struct Task {
   ~Task() { if (handle) handle.destroy(); } 
 };
 
+struct UniqueFd {
+  int fd = -1;
+  ~UniqueFd() {
+    close(fd);
+  }
+};
+
 class EventLoop {
-  int epoll_fd;
-  int stop_fd;
-  int sig_fd;
+  UniqueFd epoll_fd;
+  UniqueFd stop_fd;
+  UniqueFd sig_fd;
   std::unordered_map<int, std::coroutine_handle<>> suspended_coros;
 
 public:
   EventLoop() {
-    epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-    if (epoll_fd < 0) {
+    epoll_fd.fd = epoll_create1(EPOLL_CLOEXEC);
+    if (epoll_fd.fd < 0) {
       throw_sys_error();
     }
 
@@ -65,59 +72,34 @@ public:
     sigaddset(&mask, SIGHUP);
 
     if (sigprocmask(SIG_BLOCK, &mask, nullptr) < 0) {
-      char errbuff[1024];
-      strerror_r(errno, errbuff, sizeof(errbuff));
-      close(epoll_fd);
-      throw std::runtime_error(errbuff);
-    }
-
-    sig_fd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
-    if (sig_fd < 0) {
-      close(epoll_fd);
       throw_sys_error();
     }
 
-    stop_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (stop_fd < 0) {
-      char errbuff[1024];
-      strerror_r(errno, errbuff, sizeof(errbuff));
-      close(sig_fd);
-      close(epoll_fd);
-      throw std::runtime_error(errbuff);
+    sig_fd.fd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
+    if (sig_fd.fd < 0) {
+      throw_sys_error();
     }
 
-    epoll_event ev{};
-    ev.events = EPOLLIN;
-    ev.data.fd = stop_fd;
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, stop_fd, &ev) < 0) {
-      char errbuff[1024];
-      strerror_r(errno, errbuff, sizeof(errbuff));
-      close(sig_fd);
-      close(stop_fd);
-      close(epoll_fd);
-      throw std::runtime_error(errbuff);
+    stop_fd.fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (stop_fd.fd < 0) {
+      throw_sys_error();
     }
 
-    ev.events = EPOLLIN;
-    ev.data.fd = sig_fd;
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sig_fd, &ev) < 0) {
-      char errbuff[1024];
-      strerror_r(errno, errbuff, sizeof(errbuff));
-      close(sig_fd);
-      close(stop_fd);
-      close(epoll_fd);
-      throw std::runtime_error(errbuff);
+    for (const auto fd : {stop_fd.fd, sig_fd.fd}) {
+      epoll_event ev{};
+      ev.events = EPOLLIN;
+      ev.data.fd = fd;
+      if (epoll_ctl(epoll_fd.fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+        throw_sys_error();
+      }
     }
   }
   ~EventLoop() {
-    close(sig_fd);
-    close(stop_fd);
-    close(epoll_fd);
   }
 
   void wake_up() {
     uint64_t u = 1;
-    [[maybe_unused]] ssize_t s = write(stop_fd, &u, sizeof(uint64_t));
+    [[maybe_unused]] ssize_t s = write(stop_fd.fd, &u, sizeof(uint64_t));
   }
 
   void register_event(int fd, uint32_t events, std::coroutine_handle<> h) {
@@ -127,8 +109,8 @@ public:
 
     suspended_coros[fd] = h;
 
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev) < 0) {
-      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+    if (epoll_ctl(epoll_fd.fd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+      if (epoll_ctl(epoll_fd.fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
         throw_sys_error();
       }
     }
@@ -137,21 +119,21 @@ public:
   void run_once(std::stop_source& source) {
     epoll_event evs[10];
 
-    int nfds = epoll_wait(epoll_fd, evs, 10, -1);
+    int nfds = epoll_wait(epoll_fd.fd, evs, 10, -1);
     if (nfds < 0) {
       if (errno == EINTR) return; // signal interrupted; okay
       throw_sys_error();
     }
     for (int i = 0; i < nfds; ++i) {
       const auto fd = evs[i].data.fd;
-      if (fd == stop_fd) {
+      if (fd == stop_fd.fd) {
         uint64_t u;
-        [[maybe_unused]] ssize_t s = read(stop_fd, &u, sizeof(uint64_t));
+        [[maybe_unused]] ssize_t s = read(stop_fd.fd, &u, sizeof(uint64_t));
         continue;
       }
-      if (fd == sig_fd) {
+      if (fd == sig_fd.fd) {
         signalfd_siginfo fdsi;
-        ssize_t s = read(sig_fd, &fdsi, sizeof(fdsi));
+        ssize_t s = read(sig_fd.fd, &fdsi, sizeof(fdsi));
         if (s == sizeof(fdsi)) {
           std::osyncstream(std::cout) << "\nInterrupted by signal " << fdsi.ssi_signo <<
             ". Exiting gracefully..." << std::endl;
@@ -163,7 +145,7 @@ public:
         const auto h = it->second;
         suspended_coros.erase(it);
 
-        if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr) < 0) {
+        if (epoll_ctl(epoll_fd.fd, EPOLL_CTL_DEL, fd, nullptr) < 0) {
           if (errno != ENOENT) {
             throw_sys_error();
           }
@@ -237,9 +219,9 @@ Task async_read_stdin(EventLoop& loop, std::stop_source source) {
         continue;
       }
 
-      char errbuff[1024];
-      strerror_r(errno, errbuff, sizeof(errbuff));
-      std::osyncstream(std::cout) << "Read error: " << errbuff << std::endl;
+      char errbuff[128];
+      const char* errstr = strerror_r(errno, errbuff, sizeof(errbuff));
+      std::osyncstream(std::cout) << "Read error: " << errstr<< std::endl;
       source.request_stop();
       co_return;
     }
